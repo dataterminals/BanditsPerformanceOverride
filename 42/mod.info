@@ -1,0 +1,5 @@
+name=Bandits Performance Override
+id=BanditsPerformanceOverride
+description=Performance override for the Bandits (V2) framework on B42. Forks the core combat loop (BanditUpdate.lua) to throttle the every-tick, all-pairs proximity / line-of-sight scan (ManageCombat) that runs O(N^2) across every NPC and zombie in the cell - the dominant cost behind low FPS in dense scenes like Bandits: Week One. Peaceful, non-hostile NPCs re-scan only a few times per second instead of every frame; anyone in active combat or flagged hostile keeps scanning every tick, so reactions stay sharp. Loads after Bandits (require=Bandits2) and replaces its combat loop via file shadowing. Fork pinned to Bandits 42.18 - must be re-synced when the core mod updates. WORK IN PROGRESS.
+modversion=0.1.0
+require=Bandits2

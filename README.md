@@ -1,100 +1,74 @@
-# PZ Bandits — Performance Research & Un-junking Plan
+# Bandits Performance Override
 
-Investigation into why a **Project Zomboid B42 "Bandits: Week One"** playthrough runs at
-~8 FPS, and a plan to claw performance back via mods.
+A **performance fork** of the Project Zomboid **Bandits (V2)** framework for **B42**, aimed at
+clawing back framerate in dense human-NPC scenes (e.g. **Bandits: Week One**, which can drop to
+~8 FPS).
 
-This repo is a **cold-start handoff**: it is written so a fresh session on another machine
-(no chat history) can pick the work up exactly where it was left.
-
----
-
-## TL;DR of where we landed
-
-- The framerate problem is **not** the NPC "brains" (the per-type decision trees). Those only
-  fire when an NPC's task queue drains.
-- The real cost is an **un-throttled, every-tick, all-pairs proximity + line-of-sight scan**
-  (`ManageCombat`) run **per bandit, per tick**, over **every zombie+bandit in the cell** — i.e.
-  **O(N²) per tick**. With ~100 NPCs around the player that is the frame killer.
-- The hot functions are all `local` (file-private), so a normal standalone mod **cannot**
-  monkey-patch them. That constraint shapes the whole plan (see `OPTIMIZATION-PLAN.md`).
-- Highest-leverage **fully-standalone** win: **reduce N** (population) — O(N²) means halving the
-  crowd quarters the cost. The real algorithmic fix (throttle/cache/spatial-grid) requires
-  forking one core file.
-
-Full evidence with file:line references is in **`FINDINGS.md`**.
-The actionable plan is in **`OPTIMIZATION-PLAN.md`**.
+> **Status: WORK IN PROGRESS (v0.1.0 scaffold).** The shipped `BanditUpdate.lua` is currently a
+> byte-identical copy of vanilla Bandits 42.18 (the fork baseline). The optimization changes
+> (see below) are applied on top of it.
 
 ---
 
-## How to resume on a new machine
+## What it does (the plan)
 
-1. **Read the docs in order:** `README.md` → `FINDINGS.md` → `OPTIMIZATION-PLAN.md`.
-2. **Locate the game files** (paths differ per machine — see below).
-3. Continue from the "Next actions" list at the bottom of `OPTIMIZATION-PLAN.md`.
+The dominant cost is **`ManageCombat`** in the core `BanditUpdate.lua`: an un-throttled,
+every-tick, all-pairs proximity + line-of-sight scan run **per active bandit**, over **every
+zombie + bandit in the cell** — i.e. **O(N²) per tick**. At ~100 NPCs that's the framerate killer.
 
-### Locating the mods on any machine
+This mod throttles that scan for the common peaceful case:
 
-Project Zomboid's Steam **App ID is `108600`**. Workshop mods live under:
+- **Peaceful, non-hostile NPCs** re-scan only a few times per second instead of every frame.
+- **Bandits in active combat, or flagged `hostile`/`hostileP`,** keep scanning every tick — so
+  combat reactions stay sharp.
+- Scans are **staggered per-NPC** so the work spreads across frames instead of spiking.
 
-```
-<SteamLibrary>/steamapps/workshop/content/108600/<workshopId>/mods/<ModName>/
-```
-
-The two mods that matter (find them by **workshop ID**, the drive/library path will differ):
-
-| Role | Workshop ID | Mod folder | Notes |
-|------|-------------|-----------|-------|
-| **Core engine** (the AI, the tick loop, combat) | `3268487204` | `mods/Bandits/` | All plain Lua. Ships a folder per game version (`42.12`…`42.18`). **Use `42.18`.** |
-| **Content pack** (Week One scenario, populations, civilian brains) | `3403180543` | `mods/BanditsWeekOne/` | Built on top of the core. Uses `42.18/media/...`. |
-
-On the **desktop where this was authored**, that resolved to:
-
-```
-H:\SteamLibrary\steamapps\workshop\content\108600\3268487204\mods\Bandits\42.18\
-H:\SteamLibrary\steamapps\workshop\content\108600\3403180543\mods\BanditsWeekOne\42.18\
-```
-
-On the **laptop the library is probably on a different drive/letter.** To find it quickly,
-search the filesystem for one of the workshop IDs, e.g. (PowerShell):
-
-```powershell
-Get-ChildItem -Path C:\,D:\,E:\ -Recurse -Directory -Filter 3268487204 -ErrorAction SilentlyContinue |
-  Select-Object FullName
-```
-
-or look in `steamapps\libraryfolders.vdf` for registered library paths.
-
-> **All file references in these docs use mod-relative paths** (e.g.
-> `Bandits/42.18/media/lua/client/BanditUpdate.lua:1842`) so they're valid regardless of where
-> your Steam library lives. Prefix with your machine's `<SteamLibrary>/steamapps/workshop/content/108600/<id>/mods/`.
+The full investigation, evidence, and the broader optimization menu (population reduction,
+`AreEnemies` memoization, spatial bucketing, etc.) live in **[`research/`](research/)**.
 
 ---
 
-## Author's playthrough context (the symptom)
+## How it works (and the catch)
 
-- Scenario: **Bandits: Week One** (pre-apocalypse simulation; civilians, cops, criminals etc.
-  are reskinned zombies running player animations).
-- Symptom: **~8 FPS everywhere**, not localized to one spot.
-- Game build: **B42** (`42.18` mod builds active).
+The hot functions in `BanditUpdate.lua` are `local` (file-private), so a normal mod **cannot**
+monkey-patch them. The only mechanism is **file shadowing**: this mod ships its own copy of
+`media/lua/client/BanditUpdate.lua` and loads **after** the core mod (`require=Bandits2`) so the
+game uses our copy instead.
 
----
+That makes this a **maintained fork**, not an additive patch:
 
-## Glossary
-
-- **Bandit** — any Bandits-framework human NPC. Mechanically an `IsoZombie` flagged
-  `setVariable("Bandit", true)`, re-skinned with the player model + human animations, driven by a
-  Lua "brain" stored in its `getModData().brain`.
-- **Brain** — per-NPC state table in ModData: `id`, current `program`, `tasks` queue, `weapons`
-  (a data manifest, not a real inventory), flags (`hostile`, `endurance`, `infection`, …).
-- **Program** — a per-NPC-type behavior state machine (e.g. `ZombiePrograms.Inhabitant.Main`).
-  Returns `{status, next, tasks}`.
-- **Task** — one queued atomic action (Move, Smack, Shoot, DoorLock, …) consumed by the engine.
-- **CacheLight / CacheLightB / CacheLightZ** — global tables of lightweight `{id,x,y,z,brain}`
-  records for all entities / bandits only / zombies only.
+- **Pinned to Bandits `42.18`.** When the core mod updates, our copy goes stale and must be
+  **re-synced**: diff the new vanilla file against ours and re-apply our changes.
+- Every change we make is marked with a greppable `-- PERF FORK:` comment so the patch set is easy
+  to find and re-port.
+- **Still to verify:** that B42 actually lets a second mod win the file-shadow for client Lua by
+  load order. This is the gating assumption — test before relying on it.
 
 ---
 
-## Repo conventions
+## Repo / mirror workflow
 
-- Docs are Markdown, evidence-first, with `file:line` citations into the **`42.18`** mod builds.
-- Nothing here is game code; it's notes/plans. No mod is built yet.
+Source of truth is this repo at `D:\Github Repositories\BanditsPerformanceOverride`. The game loads
+from a mirror at `C:\Users\sylvi\Zomboid\mods\BanditsPerformanceOverride` containing **game files
+only** (root `mod.info` + `42/`). After editing here, mirror the changed game files over so the
+game picks them up.
+
+---
+
+## Layout
+
+```
+mod.info                              # root mod metadata (id=BanditsPerformanceOverride)
+42/
+  mod.info                            # versioned mod metadata (identical)
+  media/lua/client/BanditUpdate.lua   # the fork (vanilla 42.18 baseline + PERF FORK changes)
+research/                             # the original performance investigation (preserved)
+  README.md  FINDINGS.md  OPTIMIZATION-PLAN.md
+```
+
+---
+
+## Credits
+
+Built on top of the **Bandits (V2)** mod (`Bandits2`, workshop `3268487204`). All performance
+analysis in `research/` references the `42.18` builds of Bandits and BanditsWeekOne.
