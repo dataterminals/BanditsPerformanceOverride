@@ -1086,6 +1086,17 @@ local function ManageCombat(bandit)
     -- affected by this, so hostile melee NPCs still chase players normally.
     local scanGate = isOutOfAmmo and 15 or 57
 
+    -- PERF FORK (flee-dedup): accumulate the flee repulsion vector during the main
+    -- scan below, so the flee branch later doesn't need a second full pass over the
+    -- whole cell. Every enemy within escapeDist (euclidean 10 -> Manhattan < 14.14)
+    -- passes both scan gates (15 and 57), so this captures exactly the same set the
+    -- old second pass did. Stays at init values when no scan runs / no enemies near.
+    local escapeDistSq = escapeDist * escapeDist
+    local fleeSx, fleeSy = 0, 0
+    local fleeThreatCount = 0
+    local fleeClosestDistSq = math.huge
+    local fleeClosestDX, fleeClosestDY = 0, 0
+
     if runScan then
     for id, potentialEnemy in pairs(potentialEnemyList) do
 
@@ -1097,6 +1108,27 @@ local function ManageCombat(bandit)
             if BanditUtils.AreEnemies(potentialEnemy.brain, brain) then
             -- if not potentialEnemy.brain or (brain.clan ~= potentialEnemy.brain.clan and (brain.hostile or potentialEnemy.brain.hostile)) then
      
+                -- PERF FORK (flee-dedup): contribute to the repulsion vector here using
+                -- the lightweight cache record. Matches the old flee second pass, which
+                -- counted every enemy within escapeDist regardless of CanSee/light/alive.
+                do
+                    local fdx = zx - potentialEnemy.x
+                    local fdy = zy - potentialEnemy.y
+                    local fdistSq = fdx*fdx + fdy*fdy
+                    if fdistSq > 0.01 and fdistSq < escapeDistSq then
+                        fleeThreatCount = fleeThreatCount + 1
+                        if fdistSq < fleeClosestDistSq then
+                            fleeClosestDistSq = fdistSq
+                            fleeClosestDX = fdx
+                            fleeClosestDY = fdy
+                        end
+                        local fd = math.sqrt(fdistSq)
+                        local fweight = 1 / fdistSq
+                        fleeSx = fleeSx + (fdx / fd) * fweight
+                        fleeSy = fleeSy + (fdy / fd) * fweight
+                    end
+                end
+
                 -- load real instance here
                 local potentialEnemy = cache[id]
                 if potentialEnemy:isAlive() and potentialEnemy:getHealth() > 0 and bandit:CanSee(potentialEnemy) then
@@ -1276,49 +1308,12 @@ local function ManageCombat(bandit)
         -- fixme: i need to refactror this
         if not BanditBrain.HasMoveTask(brain) then
 
-            local sx, sy = 0, 0
-            local closestDistSq = math.huge
-            local closestDX, closestDY = 0, 0
-            local threatCount = 0
-            local escapeDistSq = escapeDist * escapeDist
-
-            -- =====================================
-            -- 1. BUILD DISTANCE-WEIGHTED REPULSION
-            -- =====================================
-
-            for id, enemyLight in pairs(potentialEnemyList) do
-
-                if BanditUtils.AreEnemies(enemyLight.brain, brain) then
-
-                    local dx = zx - enemyLight.x
-                    local dy = zy - enemyLight.y
-                    local distSq = dx*dx + dy*dy
-
-                    if distSq > 0.01 and distSq < escapeDistSq then
-
-                        threatCount = threatCount + 1
-
-                        -- track closest enemy (for fallback)
-                        if distSq < closestDistSq then
-                            closestDistSq = distSq
-                            closestDX = dx
-                            closestDY = dy
-                        end
-
-                        local dist = math.sqrt(distSq)
-
-                        -- normalize
-                        dx = dx / dist
-                        dy = dy / dist
-
-                        -- weight: closer enemies dominate strongly
-                        local weight = 1 / distSq
-
-                        sx = sx + dx * weight
-                        sy = sy + dy * weight
-                    end
-                end
-            end
+            -- PERF FORK (flee-dedup): reuse the repulsion vector accumulated during the
+            -- main scan above, instead of a second full pass over the whole cell.
+            local sx, sy = fleeSx, fleeSy
+            local closestDistSq = fleeClosestDistSq
+            local closestDX, closestDY = fleeClosestDX, fleeClosestDY
+            local threatCount = fleeThreatCount
 
             -- =====================================
             -- 2. BREAK PERFECT SYMMETRY
