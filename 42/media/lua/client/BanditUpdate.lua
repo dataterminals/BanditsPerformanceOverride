@@ -28,6 +28,9 @@ local SCAN_EVERY = 4  -- B1 v2: a peaceful, eligible bandit scans once every Nth
 local gridRebuilds = 0 -- B3: grid rebuilds this window (should be ~window/TTL, not per-bandit)
 local mvSum = 0       -- B4 measure: total ms spent in ApplyVisuals over the window
 local mvHeavy = 0     -- B4 measure: count of ApplyVisuals calls that took >= 1ms
+local asSum, asHeavy = 0, 0 -- profile: ManageActionState (per-update)
+local gtSum, gtHeavy = 0, 0 -- profile: GenerateTask whole (GT-MC = non-scan task work)
+local ptSum, ptHeavy = 0, 0 -- profile: ProcessTask (per-update task/anim execution)
 
 local function predicateRemovable(item)
     if not item:getModData().preserve and not instanceof(item, "Clothing") then
@@ -2202,12 +2205,12 @@ local function OnBanditUpdate(zombie)
     ManageSpeechCooldown(brain)
 
     -- ACTION STATE TWEAKS
-    -- local ts = getTimestampMs()
+    -- PERF FORK (profile): time ManageActionState.
+    local asTs = getTimestampMs()
     local continue = ManageActionState(bandit)
-    -- local elapsed = getTimestampMs() - ts
-    -- if elapsed > 1 then
-    --    print ("ManageActionState: " .. elapsed)
-    -- end
+    local asEl = getTimestampMs() - asTs
+    asSum = asSum + asEl
+    if asEl >= 1 then asHeavy = asHeavy + 1 end
 
     if not continue then return end
     
@@ -2226,17 +2229,23 @@ local function OnBanditUpdate(zombie)
         Bandit.Say(bandit, "DEAD")
     end
     
+    -- PERF FORK (profile): time GenerateTask (includes MC; GT-MC = endurance/health/
+    -- collisions/brain-program cost).
+    local gtTs = getTimestampMs()
     GenerateTask(bandit, uTick)
+    local gtEl = getTimestampMs() - gtTs
+    gtSum = gtSum + gtEl
+    if gtEl >= 1 then gtHeavy = gtHeavy + 1 end
 
     local task = Bandit.GetTask(bandit)
     if task then
-            
-        -- local ts = getTimestampMs()
+
+        -- PERF FORK (profile): time ProcessTask.
+        local ptTs = getTimestampMs()
         ProcessTask(bandit, task)
-        -- local elapsed = getTimestampMs() - ts
-        -- if elapsed > 1 then
-        --     print ("ProcessTask " .. task.action .. "(" .. task.state .. "): " .. elapsed)
-        -- end
+        local ptEl = getTimestampMs() - ptTs
+        ptSum = ptSum + ptEl
+        if ptEl >= 1 then ptHeavy = ptHeavy + 1 end
     end
 
     uTick = uTick + 1
@@ -2607,8 +2616,8 @@ local function perf()
     local totalMs = sum1 + sum2 + sum3
     local avgMs = updates > 0 and (totalMs / updates) or 0
     print (string.format(
-        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  MV(ms=%.0f heavy>=1ms=%d)  grid(rebuilds=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
-        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mcHeavy, mvSum, mvHeavy, gridRebuilds, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
+        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f)  MV(ms=%.0f)  GT(ms=%.0f)  PT(ms=%.0f)  AS(ms=%.0f)  grid(rebuilds=%d)  OnUpdate(n=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)  [GT includes MC]",
+        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mvSum, gtSum, ptSum, asSum, gridRebuilds, updates, totalMs, avgMs, sum3))
     iter1 = 0
     iter2 = 0
     iter3 = 0
@@ -2623,6 +2632,9 @@ local function perf()
     gridRebuilds = 0
     mvSum = 0
     mvHeavy = 0
+    asSum = 0; asHeavy = 0
+    gtSum = 0; gtHeavy = 0
+    ptSum = 0; ptHeavy = 0
 end
 
 Events.OnZombieUpdate.Remove(OnBanditUpdate)
@@ -2637,9 +2649,7 @@ Events.OnZombieDead.Add(OnZombieDead)
 Events.OnDeadBodySpawn.Remove(OnDeadBodySpawn)
 Events.OnDeadBodySpawn.Add(OnDeadBodySpawn)
 
--- PERF FORK: perf printer DISABLED again. B4 measurement is done: ApplyVisuals (MV)
--- measured at only ~4% of bandit-update time, so gating it was not worth the
--- visual-flicker risk. All instrumentation (incl. the MV timer) is left dormant --
--- uncomment the two lines below to re-measure anytime.
--- Events.EveryOneMinute.Remove(perf)
--- Events.EveryOneMinute.Add(perf)
+-- PERF FORK: perf printer ENABLED for phase profiling (GT/PT/AS breakdown of the
+-- diffuse non-scan cost). Disable again by commenting the two lines below.
+Events.EveryOneMinute.Remove(perf)
+Events.EveryOneMinute.Add(perf)
