@@ -26,6 +26,8 @@ local scanSkip = 0    -- scans skipped by the throttle
 local lastPerfTs = nil -- wall-clock of last perf() print, to report real window length
 local SCAN_EVERY = 4  -- B1 v2: a peaceful, eligible bandit scans once every Nth update
 local gridRebuilds = 0 -- B3: grid rebuilds this window (should be ~window/TTL, not per-bandit)
+local mvSum = 0       -- B4 measure: total ms spent in ApplyVisuals over the window
+local mvHeavy = 0     -- B4 measure: count of ApplyVisuals calls that took >= 1ms
 
 local function predicateRemovable(item)
     if not item:getModData().preserve and not instanceof(item, "Clothing") then
@@ -2175,7 +2177,12 @@ local function OnBanditUpdate(zombie)
     end
     
     -- ADJUST HUMAN VISUALS
+    -- PERF FORK (B4 measure): time ApplyVisuals to size its share before optimizing.
+    local mvTs = getTimestampMs()
     Bandit.ApplyVisuals(bandit, brain)
+    local mvEl = getTimestampMs() - mvTs
+    mvSum = mvSum + mvEl
+    if mvEl >= 1 then mvHeavy = mvHeavy + 1 end
 
     -- MANAGE BANDIT TORCH
     --
@@ -2600,8 +2607,8 @@ local function perf()
     local totalMs = sum1 + sum2 + sum3
     local avgMs = updates > 0 and (totalMs / updates) or 0
     print (string.format(
-        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  grid(rebuilds=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
-        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mcHeavy, gridRebuilds, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
+        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  MV(ms=%.0f heavy>=1ms=%d)  grid(rebuilds=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
+        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mcHeavy, mvSum, mvHeavy, gridRebuilds, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
     iter1 = 0
     iter2 = 0
     iter3 = 0
@@ -2614,6 +2621,8 @@ local function perf()
     scanTimer = 0
     scanSkip = 0
     gridRebuilds = 0
+    mvSum = 0
+    mvHeavy = 0
 end
 
 Events.OnZombieUpdate.Remove(OnBanditUpdate)
@@ -2628,8 +2637,6 @@ Events.OnZombieDead.Add(OnZombieDead)
 Events.OnDeadBodySpawn.Remove(OnDeadBodySpawn)
 Events.OnDeadBodySpawn.Add(OnDeadBodySpawn)
 
--- PERF FORK: perf printer DISABLED for now. All instrumentation (perf(), the mc/scan/
--- grid counters, the load marker) is left intact -- to re-enable measurement, just
--- uncomment the two lines below and re-mirror.
--- Events.EveryOneMinute.Remove(perf)
--- Events.EveryOneMinute.Add(perf)
+-- PERF FORK: perf printer ENABLED for B4 measurement (ApplyVisuals timing).
+Events.EveryOneMinute.Remove(perf)
+Events.EveryOneMinute.Add(perf)
