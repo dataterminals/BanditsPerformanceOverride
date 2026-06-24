@@ -25,6 +25,7 @@ local scanTimer = 0   -- scans that ran while eligible (throttle let them throug
 local scanSkip = 0    -- scans skipped by the throttle
 local lastPerfTs = nil -- wall-clock of last perf() print, to report real window length
 local SCAN_EVERY = 4  -- B1 v2: a peaceful, eligible bandit scans once every Nth update
+local gridRebuilds = 0 -- B3: grid rebuilds this window (should be ~window/TTL, not per-bandit)
 
 local function predicateRemovable(item)
     if not item:getModData().preserve and not instanceof(item, "Clothing") then
@@ -919,9 +920,42 @@ local function ManageCollisions(bandit)
 end
 
 -- manages melee and weapon combat
+-- PERF FORK (B3): coarse spatial grid over CacheLight, rebuilt at most every
+-- BPO_GRID_TTL ms (cheap, O(N), and shared by every bandit that scans within the
+-- window). ManageCombat then walks only the buckets near the bandit instead of
+-- iterating all of CacheLight, turning the per-scan cost from O(N) into O(local
+-- density) -- which is what actually bends the O(N^2) curve at high bandit counts.
+local BPO_GRID_CELL = 16
+local BPO_GRID_TTL = 150
+local BPO_grid = {}
+local BPO_gridStamp = 0
+local function BPO_RebuildGrid()
+    local g = {}
+    local cl = BanditZombie.CacheLight
+    if cl then
+        for id, light in pairs(cl) do
+            local cx = math.floor(light.x / BPO_GRID_CELL)
+            local cy = math.floor(light.y / BPO_GRID_CELL)
+            local col = g[cx]
+            if not col then col = {}; g[cx] = col end
+            local bucket = col[cy]
+            if not bucket then bucket = {}; col[cy] = bucket end
+            bucket[#bucket + 1] = id
+        end
+    end
+    BPO_grid = g
+    BPO_gridStamp = getTimestampMs()
+    gridRebuilds = gridRebuilds + 1
+end
+local function BPO_EnsureGrid()
+    if getTimestampMs() - BPO_gridStamp >= BPO_GRID_TTL then
+        BPO_RebuildGrid()
+    end
+end
+
 local function ManageCombat(bandit)
 
-    if bandit:isCrawling() then return {} end 
+    if bandit:isCrawling() then return {} end
     if Bandit.IsSleeping(bandit) then return {} end
     -- if bandit:getActionStateName() == "bumped" then return {} end
 
@@ -1121,10 +1155,25 @@ local function ManageCombat(bandit)
     local fleeClosestDX, fleeClosestDY = 0, 0
 
     if runScan then
-    for id, potentialEnemy in pairs(potentialEnemyList) do
+    -- PERF FORK (B3): walk only buckets near the bandit instead of all of CacheLight.
+    -- Candidate positions are still read live from CacheLight and re-gated by
+    -- distManhattan < scanGate, so the considered set matches the old full scan (the
+    -- +1 reach margin covers entities that moved up to one cell since the last rebuild).
+    BPO_EnsureGrid()
+    local reach = math.ceil(scanGate / BPO_GRID_CELL) + 1
+    local bcx, bcy = math.floor(zx / BPO_GRID_CELL), math.floor(zy / BPO_GRID_CELL)
+    for gx = bcx - reach, bcx + reach do
+        local col = BPO_grid[gx]
+        if col then
+        for gy = bcy - reach, bcy + reach do
+            local bucket = col[gy]
+            if bucket then
+            for bi = 1, #bucket do
+                local id = bucket[bi]
+                local potentialEnemy = potentialEnemyList[id]
+                if potentialEnemy then
 
         -- quick manhattan check for performance boost
-        -- if BanditUtils.DistToManhattan(potentialEnemy.x, potentialEnemy.y, zx, zy) < 36 then
         local distManhattan = math.abs(potentialEnemy.x - zx) + math.abs(potentialEnemy.y - zy)
         if distManhattan < scanGate then -- PERF FORK (B2): was < 57
 
@@ -1250,7 +1299,12 @@ local function ManageCombat(bandit)
                 end
             end
         end
-    end
+                    end -- PERF FORK (B3): close if potentialEnemy
+                end -- close for bi
+                end -- close if bucket
+            end -- close for gy
+            end -- close if col
+        end -- close for gx
     -- PERF FORK: record whether a threat was present this scan, so the throttle
     -- above keeps an engaged bandit scanning every tick. Self-clears the moment a
     -- (re-run) scan finds nothing, dropping the bandit back to the cheap cadence.
@@ -2544,8 +2598,8 @@ local function perf()
     local totalMs = sum1 + sum2 + sum3
     local avgMs = updates > 0 and (totalMs / updates) or 0
     print (string.format(
-        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
-        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mcHeavy, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
+        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  grid(rebuilds=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
+        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mcHeavy, gridRebuilds, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
     iter1 = 0
     iter2 = 0
     iter3 = 0
@@ -2557,6 +2611,7 @@ local function perf()
     scanForced = 0
     scanTimer = 0
     scanSkip = 0
+    gridRebuilds = 0
 end
 
 Events.OnZombieUpdate.Remove(OnBanditUpdate)
