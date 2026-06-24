@@ -4,27 +4,34 @@ A **performance fork** of the Project Zomboid **Bandits (V2)** framework for **B
 clawing back framerate in dense human-NPC scenes (e.g. **Bandits: Week One**, which can drop to
 ~8 FPS).
 
-> **Status: WORK IN PROGRESS (v0.1.0 scaffold).** The shipped `BanditUpdate.lua` is currently a
-> byte-identical copy of vanilla Bandits 42.18 (the fork baseline). The optimization changes
-> (see below) are applied on top of it.
+> **Status: working (v0.2.0).** B1–B3 implemented, measured, and validated in-game: a dense
+> Bandits: Week One scene went from ~8 FPS at ~100 NPCs to smooth at **~300**. The fork is kept as a
+> minimal, greppable diff against vanilla Bandits 42.18 for easy re-porting.
 
 ---
 
-## What it does (the plan)
+## What it does
 
 The dominant cost is **`ManageCombat`** in the core `BanditUpdate.lua`: an un-throttled,
-every-tick, all-pairs proximity + line-of-sight scan run **per active bandit**, over **every
-zombie + bandit in the cell** — i.e. **O(N²) per tick**. At ~100 NPCs that's the framerate killer.
+every-update, all-pairs proximity + line-of-sight scan run **per active bandit** over **every
+zombie + bandit in the cell** — i.e. **O(N²)**. At ~100+ NPCs that's the framerate killer.
 
-This mod throttles that scan for the common peaceful case:
+This fork rewrites that scan with four changes (each tagged `-- PERF FORK:`):
 
-- **Peaceful, non-hostile NPCs** re-scan only a few times per second instead of every frame.
-- **Bandits in active combat, or flagged `hostile`/`hostileP`,** keep scanning every tick — so
-  combat reactions stay sharp.
-- Scans are **staggered per-NPC** so the work spreads across frames instead of spiking.
+1. **Count-based throttle** — peaceful, non-hostile NPCs run the scan only once every Nth update
+   (staggered per-NPC so the crowd desyncs across frames). Anyone in active combat or flagged
+   `hostile`/`hostileP` keeps scanning every update, so reactions stay sharp.
+2. **Shooter-safe distance gate** — melee / out-of-ammo NPCs skip the expensive line-of-sight
+   raycasts on far targets they could never reach, while NPCs with a loaded ranged weapon keep the
+   full engagement radius.
+3. **Flee de-duplication** — the flee branch no longer makes a second full-cell pass; its repulsion
+   vector is accumulated during the main scan.
+4. **Spatial grid** — a coarse bucket grid (rebuilt at most every 150ms) means each scan only walks
+   nearby cells instead of the whole cell, turning the per-scan cost from **O(N)** into roughly
+   **O(local density)**. This is the change that bends the O(N²) curve.
 
-The full investigation, evidence, and the broader optimization menu (population reduction,
-`AreEnemies` memoization, spatial bucketing, etc.) live in **[`research/`](research/)**.
+The full investigation and evidence — plus the levers we measured but deliberately *didn't* take
+(e.g. gating `ApplyVisuals`, which profiled at only ~4% of cost) — live in **[`research/`](research/)**.
 
 ---
 
@@ -41,8 +48,9 @@ That makes this a **maintained fork**, not an additive patch:
   **re-synced**: diff the new vanilla file against ours and re-apply our changes.
 - Every change we make is marked with a greppable `-- PERF FORK:` comment so the patch set is easy
   to find and re-port.
-- **Still to verify:** that B42 actually lets a second mod win the file-shadow for client Lua by
-  load order. This is the gating assumption — test before relying on it.
+- **Confirmed working:** B42 does let a second mod win the file-shadow for client Lua by load
+  order. `require=Bandits2` makes this mod load after the core, so the game uses our copy (the
+  in-game load marker in the console confirms it).
 
 ---
 
