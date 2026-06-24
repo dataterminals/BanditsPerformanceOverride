@@ -2628,6 +2628,8 @@ Events.OnZombieDead.Add(OnZombieDead)
 Events.OnDeadBodySpawn.Remove(OnDeadBodySpawn)
 Events.OnDeadBodySpawn.Add(OnDeadBodySpawn)
 
--- PERF FORK: perf printer enabled for measurement (once per minute, low spam).
-Events.EveryOneMinute.Remove(perf)
-Events.EveryOneMinute.Add(perf)
+-- PERF FORK: perf printer DISABLED for now. All instrumentation (perf(), the mc/scan/
+-- grid counters, the load marker) is left intact -- to re-enable measurement, just
+-- uncomment the two lines below and re-mirror.
+-- Events.EveryOneMinute.Remove(perf)
+-- Events.EveryOneMinute.Add(perf)
