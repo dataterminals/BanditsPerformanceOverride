@@ -1,5 +1,15 @@
 require "BanditZombie"
 
+-- ============================================================================
+-- PERF FORK (BanditsPerformanceOverride): file-shadow of Bandits 42.18
+-- client/BanditUpdate.lua. Every change vs vanilla is tagged "PERF FORK".
+-- Purpose: throttle the O(N^2) per-tick ManageCombat proximity/LOS scan that
+-- dominates frame time in dense scenes. See research/ for the full analysis.
+-- This print is the load marker: seeing it in console proves this shadow won
+-- the file override over the core Bandits mod.
+-- ============================================================================
+print("[BanditsPerformanceOverride] combat fork loaded (BanditUpdate.lua shadow active)")
+
 local sum1 = 0
 local sum2 = 0
 local sum3 = 0
@@ -1045,6 +1055,27 @@ local function ManageCombat(bandit)
     
     -- COMBAT AGAINST ZOMBIES AND BANDITS FROM OTHER CLAN
     local cache, potentialEnemyList = BanditZombie.Cache, BanditZombie.CacheLight
+
+    -- PERF FORK: throttle the O(N^2) entity scan below. A bandit that is hostile,
+    -- or that was engaged (had an enemy) on its previous scan, keeps scanning every
+    -- tick so combat stays responsive. A peaceful, non-hostile, non-engaged bandit
+    -- re-scans only ~3-4x/sec, with the deadline staggered per brain.id so the whole
+    -- crowd's scans spread across frames instead of all firing on the same tick.
+    -- When skipped, enemyCharacter/enemies/friendlies stay at their init values, so
+    -- the action chain below issues no combat task; healing/reload/resupply (computed
+    -- up top, independent of the scan) still fire, and the bandit falls through to its
+    -- brain program as normal.
+    local runScan = true
+    if not (brain.hostile or brain.hostileP or brain.combatActive) then
+        local now = getTimestampMs()
+        if brain.combatNextScan and now < brain.combatNextScan then
+            runScan = false
+        else
+            brain.combatNextScan = now + 250 + (math.abs(brain.id or 0) % 200)
+        end
+    end
+
+    if runScan then
     for id, potentialEnemy in pairs(potentialEnemyList) do
 
         -- quick manhattan check for performance boost
@@ -1154,6 +1185,15 @@ local function ManageCombat(bandit)
             end
         end
     end
+    -- PERF FORK: record whether a threat was present this scan, so the throttle
+    -- above keeps an engaged bandit scanning every tick. Self-clears the moment a
+    -- (re-run) scan finds nothing, dropping the bandit back to the cheap cadence.
+    if enemyCharacter or enemies > 0 then
+        brain.combatActive = true
+    else
+        brain.combatActive = false
+    end
+    end -- PERF FORK: close runScan guard
 
     if getWorld():getGameMode() == "Multiplayer" and IsWindowClose(bandit) then
         if bandit:getPrimaryHandItem() then
