@@ -18,10 +18,13 @@ local iter2 = 0
 local iter3 = 0
 
 -- PERF FORK: extra diagnostic counters surfaced in the per-minute perf() report.
-local mcSum = 0      -- total ms spent in ManageCombat over the minute
-local mcHeavy = 0    -- count of ManageCombat calls that took >= 1ms
-local scanRun = 0    -- entity scans actually run
-local scanSkip = 0   -- entity scans skipped by the B1 throttle
+local mcSum = 0       -- total ms spent in ManageCombat over the minute
+local mcHeavy = 0     -- count of ManageCombat calls that took >= 1ms
+local scanForced = 0  -- scans that ran because hostile/combatActive (throttle bypassed)
+local scanTimer = 0   -- scans that ran while eligible (throttle let them through)
+local scanSkip = 0    -- scans skipped by the throttle
+local lastPerfTs = nil -- wall-clock of last perf() print, to report real window length
+local SCAN_EVERY = 4  -- B1 v2: a peaceful, eligible bandit scans once every Nth update
 
 local function predicateRemovable(item)
     if not item:getModData().preserve and not instanceof(item, "Clothing") then
@@ -1072,17 +1075,28 @@ local function ManageCombat(bandit)
     -- up top, independent of the scan) still fire, and the bandit falls through to its
     -- brain program as normal.
     local runScan = true
-    if not (brain.hostile or brain.hostileP or brain.combatActive) then
-        local now = getTimestampMs()
-        if brain.combatNextScan and now < brain.combatNextScan then
+    local forced = brain.hostile or brain.hostileP or brain.combatActive
+    if not forced then
+        -- PERF FORK (B1 v2): count-based throttle. The original 250ms wall-clock window
+        -- was shorter than the real per-bandit update interval at high N (engine tiered
+        -- updates space updates >250ms apart), so it almost never skipped (measured
+        -- run=755 / skip=4). Scan once every SCAN_EVERY updates instead, staggered by id
+        -- so the crowd's scans desync across frames rather than all landing together.
+        brain.scanTick = (brain.scanTick or 0) + 1
+        if (brain.scanTick + (math.abs(brain.id or 0) % SCAN_EVERY)) % SCAN_EVERY ~= 0 then
             runScan = false
-        else
-            brain.combatNextScan = now + 250 + (math.abs(brain.id or 0) % 200)
         end
     end
 
-    -- PERF FORK: count throttle decisions (run vs skipped) for the perf report.
-    if runScan then scanRun = scanRun + 1 else scanSkip = scanSkip + 1 end
+    -- PERF FORK: break down scan decisions. forced = ran due to hostile/combatActive;
+    -- timer = ran while eligible (throttle passed it through); skip = throttled out.
+    if not runScan then
+        scanSkip = scanSkip + 1
+    elseif forced then
+        scanForced = scanForced + 1
+    else
+        scanTimer = scanTimer + 1
+    end
 
     -- PERF FORK (B2): conditional scan gate. A bandit that can't shoot (out of ammo /
     -- melee only) can only act on enemies within melee (~2.6) or flee range
@@ -2521,14 +2535,17 @@ local function perf()
     --   MC       = ManageCombat's own cost: total ms + count of calls that hit >=1ms.
     --   OnUpdate = whole-handler cost: invocation count, <1/1-5/>=5ms buckets,
     --              total/avg ms, and heavyMs (time in the >=5ms bucket = the pain).
+    local now = getTimestampMs()
+    local elapsedReal = lastPerfTs and (now - lastPerfTs) or 0
+    lastPerfTs = now
     local nb = BanditZombie.CacheLightBCnt or 0
     local nz = BanditZombie.CacheLightZCnt or 0
     local updates = iter1 + iter2 + iter3
     local totalMs = sum1 + sum2 + sum3
     local avgMs = updates > 0 and (totalMs / updates) or 0
     print (string.format(
-        "[BPO PERF] /min  N(bandits=%d zombies=%d)  scans(run=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
-        nb, nz, scanRun, scanSkip, mcSum, mcHeavy, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
+        "[BPO PERF] /%.1fs  N(bandits=%d zombies=%d)  scans(forced=%d timer=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
+        elapsedReal/1000, nb, nz, scanForced, scanTimer, scanSkip, mcSum, mcHeavy, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
     iter1 = 0
     iter2 = 0
     iter3 = 0
@@ -2537,7 +2554,8 @@ local function perf()
     sum3 = 0
     mcSum = 0
     mcHeavy = 0
-    scanRun = 0
+    scanForced = 0
+    scanTimer = 0
     scanSkip = 0
 end
 
