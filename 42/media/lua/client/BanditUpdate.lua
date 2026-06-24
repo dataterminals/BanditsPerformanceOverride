@@ -24,7 +24,7 @@ local scanForced = 0  -- scans that ran because hostile/combatActive (throttle b
 local scanTimer = 0   -- scans that ran while eligible (throttle let them through)
 local scanSkip = 0    -- scans skipped by the throttle
 local lastPerfTs = nil -- wall-clock of last perf() print, to report real window length
-local SCAN_EVERY = 4  -- B1 v2: a peaceful, eligible bandit scans once every Nth update
+local SCAN_EVERY = 6  -- B1 v2: a peaceful, eligible bandit scans once every Nth update (tuned 4->6 after profiling showed MC still ~43%)
 local gridRebuilds = 0 -- B3: grid rebuilds this window (should be ~window/TTL, not per-bandit)
 local mvSum = 0       -- B4 measure: total ms spent in ApplyVisuals over the window
 local mvHeavy = 0     -- B4 measure: count of ApplyVisuals calls that took >= 1ms
