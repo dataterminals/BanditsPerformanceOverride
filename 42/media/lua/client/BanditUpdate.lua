@@ -2637,6 +2637,9 @@ Events.OnZombieDead.Add(OnZombieDead)
 Events.OnDeadBodySpawn.Remove(OnDeadBodySpawn)
 Events.OnDeadBodySpawn.Add(OnDeadBodySpawn)
 
--- PERF FORK: perf printer ENABLED for B4 measurement (ApplyVisuals timing).
-Events.EveryOneMinute.Remove(perf)
-Events.EveryOneMinute.Add(perf)
+-- PERF FORK: perf printer DISABLED again. B4 measurement is done: ApplyVisuals (MV)
+-- measured at only ~4% of bandit-update time, so gating it was not worth the
+-- visual-flicker risk. All instrumentation (incl. the MV timer) is left dormant --
+-- uncomment the two lines below to re-measure anytime.
+-- Events.EveryOneMinute.Remove(perf)
+-- Events.EveryOneMinute.Add(perf)
