@@ -1075,13 +1075,24 @@ local function ManageCombat(bandit)
         end
     end
 
+    -- PERF FORK (B2): conditional scan gate. A bandit that can't shoot (out of ammo /
+    -- melee only) can only act on enemies within melee (~2.6) or flee range
+    -- (escapeDist=10); it still pays a CanSee raycast on every entity within ~40 tiles
+    -- today. Tighten its pre-filter to 15 Manhattan (covers euclidean-10 flee range with
+    -- margin: 10*sqrt2 ~= 14.1) so it skips those wasted far raycasts. A bandit with a
+    -- loaded ranged weapon keeps the wide 57 gate (= the 40-tile acquisition radius) so
+    -- it can still spot and shoot distant targets. NOTE: player targeting uses a separate
+    -- loop with no Manhattan gate, and pursuit lives in the brain program -- neither is
+    -- affected by this, so hostile melee NPCs still chase players normally.
+    local scanGate = isOutOfAmmo and 15 or 57
+
     if runScan then
     for id, potentialEnemy in pairs(potentialEnemyList) do
 
         -- quick manhattan check for performance boost
         -- if BanditUtils.DistToManhattan(potentialEnemy.x, potentialEnemy.y, zx, zy) < 36 then
         local distManhattan = math.abs(potentialEnemy.x - zx) + math.abs(potentialEnemy.y - zy)
-        if distManhattan < 57 then
+        if distManhattan < scanGate then -- PERF FORK (B2): was < 57
 
             if BanditUtils.AreEnemies(potentialEnemy.brain, brain) then
             -- if not potentialEnemy.brain or (brain.clan ~= potentialEnemy.brain.clan and (brain.hostile or potentialEnemy.brain.hostile)) then
