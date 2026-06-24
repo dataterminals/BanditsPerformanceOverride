@@ -1157,10 +1157,12 @@ local function ManageCombat(bandit)
     if runScan then
     -- PERF FORK (B3): walk only buckets near the bandit instead of all of CacheLight.
     -- Candidate positions are still read live from CacheLight and re-gated by
-    -- distManhattan < scanGate, so the considered set matches the old full scan (the
-    -- +1 reach margin covers entities that moved up to one cell since the last rebuild).
+    -- distManhattan < scanGate, so the considered set matches the old full scan.
+    -- reach = floor(scanGate/cell)+1 is the exact worst-case cell span for the gate
+    -- (melee 15 -> reach 1 = 3x3; ranged 57 -> reach 4 = 9x9). The <=150ms rebuild
+    -- staleness is <1 tile of movement, well inside that span, so nothing is missed.
     BPO_EnsureGrid()
-    local reach = math.ceil(scanGate / BPO_GRID_CELL) + 1
+    local reach = math.floor(scanGate / BPO_GRID_CELL) + 1
     local bcx, bcy = math.floor(zx / BPO_GRID_CELL), math.floor(zy / BPO_GRID_CELL)
     for gx = bcx - reach, bcx + reach do
         local col = BPO_grid[gx]
