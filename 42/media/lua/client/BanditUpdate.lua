@@ -2498,7 +2498,15 @@ local function OnDeadBodySpawn(body)
 end
 
 local function perf()
-    print ("BANDIT UPDATE REPORT: invocations: " .. "short: " .. iter1 .. "( " .. sum1.. "), medium: " .. iter2 .. "(" .. sum2 .. "), long: " .. iter3 .. "(" .. sum3.. ")")
+    -- PERF FORK: clearer once-per-minute report. Buckets count OnBanditUpdate
+    -- invocations over the last minute by cost: <1ms / 1-5ms / >=5ms. heavyMs is
+    -- the total time spent in the >=5ms bucket = where the frame pain lives.
+    local updates = iter1 + iter2 + iter3
+    local totalMs = sum1 + sum2 + sum3
+    local avgMs = updates > 0 and (totalMs / updates) or 0
+    print (string.format(
+        "[BPO PERF] /min: updates=%d  (<1ms:%d  1-5ms:%d  >=5ms:%d)  totalMs=%.0f  avgMs=%.3f  heavyMs=%.0f",
+        updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
     iter1 = 0
     iter2 = 0
     iter3 = 0
@@ -2519,5 +2527,6 @@ Events.OnZombieDead.Add(OnZombieDead)
 Events.OnDeadBodySpawn.Remove(OnDeadBodySpawn)
 Events.OnDeadBodySpawn.Add(OnDeadBodySpawn)
 
--- Events.EveryOneMinute.Remove(perf)
--- Events.EveryOneMinute.Add(perf)
+-- PERF FORK: perf printer enabled for measurement (once per minute, low spam).
+Events.EveryOneMinute.Remove(perf)
+Events.EveryOneMinute.Add(perf)
