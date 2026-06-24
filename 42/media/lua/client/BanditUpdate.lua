@@ -17,6 +17,12 @@ local iter1 = 0
 local iter2 = 0
 local iter3 = 0
 
+-- PERF FORK: extra diagnostic counters surfaced in the per-minute perf() report.
+local mcSum = 0      -- total ms spent in ManageCombat over the minute
+local mcHeavy = 0    -- count of ManageCombat calls that took >= 1ms
+local scanRun = 0    -- entity scans actually run
+local scanSkip = 0   -- entity scans skipped by the B1 throttle
+
 local function predicateRemovable(item)
     if not item:getModData().preserve and not instanceof(item, "Clothing") then
         return true
@@ -1075,6 +1081,9 @@ local function ManageCombat(bandit)
         end
     end
 
+    -- PERF FORK: count throttle decisions (run vs skipped) for the perf report.
+    if runScan then scanRun = scanRun + 1 else scanSkip = scanSkip + 1 end
+
     -- PERF FORK (B2): conditional scan gate. A bandit that can't shoot (out of ammo /
     -- melee only) can only act on enemies within melee (~2.6) or flee range
     -- (escapeDist=10); it still pays a CanSee raycast on every entity within ~40 tiles
@@ -1884,12 +1893,13 @@ local function GenerateTask(bandit, uTick)
 
     -- MANAGE MELEE / SHOOTING TASKS
     if #tasks == 0  then
-        -- local ts = getTimestampMs()
+        -- PERF FORK: time ManageCombat itself so the perf report can isolate the
+        -- scan cost from the rest of OnBanditUpdate.
+        local mcTs = getTimestampMs()
         local combatTasks = ManageCombat(bandit)
-        -- local elapsed = getTimestampMs() - ts
-        -- if elapsed > 1 then
-        --     print ("ManageCombat: " .. elapsed)
-        -- end
+        local mcEl = getTimestampMs() - mcTs
+        mcSum = mcSum + mcEl
+        if mcEl >= 1 then mcHeavy = mcHeavy + 1 end
         if #combatTasks > 0 then
             for _, t in pairs(combatTasks) do table.insert(tasks, t) end
         end
@@ -2504,21 +2514,31 @@ local function OnDeadBodySpawn(body)
 end
 
 local function perf()
-    -- PERF FORK: clearer once-per-minute report. Buckets count OnBanditUpdate
-    -- invocations over the last minute by cost: <1ms / 1-5ms / >=5ms. heavyMs is
-    -- the total time spent in the >=5ms bucket = where the frame pain lives.
+    -- PERF FORK: once-per-minute diagnostic report (low spam). Everything needed to
+    -- interpret framerate in one tailable line:
+    --   N        = live crowd size (bandits / zombies) from the cache; the N in O(N^2).
+    --   scans    = B1 throttle: entity scans run vs skipped this minute.
+    --   MC       = ManageCombat's own cost: total ms + count of calls that hit >=1ms.
+    --   OnUpdate = whole-handler cost: invocation count, <1/1-5/>=5ms buckets,
+    --              total/avg ms, and heavyMs (time in the >=5ms bucket = the pain).
+    local nb = BanditZombie.CacheLightBCnt or 0
+    local nz = BanditZombie.CacheLightZCnt or 0
     local updates = iter1 + iter2 + iter3
     local totalMs = sum1 + sum2 + sum3
     local avgMs = updates > 0 and (totalMs / updates) or 0
     print (string.format(
-        "[BPO PERF] /min: updates=%d  (<1ms:%d  1-5ms:%d  >=5ms:%d)  totalMs=%.0f  avgMs=%.3f  heavyMs=%.0f",
-        updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
+        "[BPO PERF] /min  N(bandits=%d zombies=%d)  scans(run=%d skip=%d)  MC(ms=%.0f heavy>=1ms=%d)  OnUpdate(n=%d <1ms=%d 1-5ms=%d >=5ms=%d totalMs=%.0f avgMs=%.3f heavyMs=%.0f)",
+        nb, nz, scanRun, scanSkip, mcSum, mcHeavy, updates, iter1, iter2, iter3, totalMs, avgMs, sum3))
     iter1 = 0
     iter2 = 0
     iter3 = 0
     sum1 = 0
     sum2 = 0
     sum3 = 0
+    mcSum = 0
+    mcHeavy = 0
+    scanRun = 0
+    scanSkip = 0
 end
 
 Events.OnZombieUpdate.Remove(OnBanditUpdate)
