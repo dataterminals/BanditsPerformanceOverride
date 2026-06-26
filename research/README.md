@@ -19,16 +19,18 @@ This repo is a **cold-start handoff**: it is written so a fresh session on anoth
   monkey-patch them. That constraint shapes the whole plan (see `OPTIMIZATION-PLAN.md`).
 - Highest-leverage **fully-standalone** win: **reduce N** (population) — O(N²) means halving the
   crowd quarters the cost. The real algorithmic fix (throttle/cache/spatial-grid) requires
-  forking one core file.
+  overriding one core file.
 
 Full evidence with file:line references is in **`FINDINGS.md`**.
 The actionable plan is in **`OPTIMIZATION-PLAN.md`**.
+The story of how we got there — wrong turns included — is in **`HOW-WE-FOUND-IT.md`**.
 
 ---
 
 ## How to resume on a new machine
 
-1. **Read the docs in order:** `README.md` → `FINDINGS.md` → `OPTIMIZATION-PLAN.md`.
+1. **Read the docs in order:** `README.md` → `FINDINGS.md` → `OPTIMIZATION-PLAN.md`
+   (and `HOW-WE-FOUND-IT.md` for the narrative of how it all came together).
 2. **Locate the game files** (paths differ per machine — see below).
 3. Continue from the "Next actions" list at the bottom of `OPTIMIZATION-PLAN.md`.
 

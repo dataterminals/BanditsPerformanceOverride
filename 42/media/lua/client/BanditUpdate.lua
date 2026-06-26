@@ -1,14 +1,14 @@
 require "BanditZombie"
 
 -- ============================================================================
--- PERF FORK (BanditsPerformanceOverride): file-shadow of Bandits 42.18
--- client/BanditUpdate.lua. Every change vs vanilla is tagged "PERF FORK".
+-- PERF OVERRIDE (BanditsPerformanceOverride): file-shadow of Bandits 42.18
+-- client/BanditUpdate.lua. Every change vs vanilla is tagged "PERF OVERRIDE".
 -- Purpose: throttle the O(N^2) per-tick ManageCombat proximity/LOS scan that
 -- dominates frame time in dense scenes. See research/ for the full analysis.
 -- This print is the load marker: seeing it in console proves this shadow won
 -- the file override over the core Bandits mod.
 -- ============================================================================
-print("[BanditsPerformanceOverride] combat fork loaded (BanditUpdate.lua shadow active)")
+print("[BanditsPerformanceOverride] combat override loaded (BanditUpdate.lua shadow active)")
 
 local sum1 = 0
 local sum2 = 0
@@ -17,7 +17,7 @@ local iter1 = 0
 local iter2 = 0
 local iter3 = 0
 
--- PERF FORK: extra diagnostic counters surfaced in the per-minute perf() report.
+-- PERF OVERRIDE: extra diagnostic counters surfaced in the per-minute perf() report.
 local mcSum = 0       -- total ms spent in ManageCombat over the minute
 local mcHeavy = 0     -- count of ManageCombat calls that took >= 1ms
 local scanForced = 0  -- scans that ran because hostile/combatActive (throttle bypassed)
@@ -925,7 +925,7 @@ local function ManageCollisions(bandit)
 end
 
 -- manages melee and weapon combat
--- PERF FORK (B3): coarse spatial grid over CacheLight, rebuilt at most every
+-- PERF OVERRIDE (B3): coarse spatial grid over CacheLight, rebuilt at most every
 -- BPO_GRID_TTL ms (cheap, O(N), and shared by every bandit that scans within the
 -- window). ManageCombat then walks only the buckets near the bandit instead of
 -- iterating all of CacheLight, turning the per-scan cost from O(N) into O(local
@@ -1104,7 +1104,7 @@ local function ManageCombat(bandit)
     -- COMBAT AGAINST ZOMBIES AND BANDITS FROM OTHER CLAN
     local cache, potentialEnemyList = BanditZombie.Cache, BanditZombie.CacheLight
 
-    -- PERF FORK: throttle the O(N^2) entity scan below. A bandit that is hostile,
+    -- PERF OVERRIDE: throttle the O(N^2) entity scan below. A bandit that is hostile,
     -- or that was engaged (had an enemy) on its previous scan, keeps scanning every
     -- tick so combat stays responsive. A peaceful, non-hostile, non-engaged bandit
     -- re-scans only ~3-4x/sec, with the deadline staggered per brain.id so the whole
@@ -1116,7 +1116,7 @@ local function ManageCombat(bandit)
     local runScan = true
     local forced = brain.hostile or brain.hostileP or brain.combatActive
     if not forced then
-        -- PERF FORK (B1 v2): count-based throttle. The original 250ms wall-clock window
+        -- PERF OVERRIDE (B1 v2): count-based throttle. The original 250ms wall-clock window
         -- was shorter than the real per-bandit update interval at high N (engine tiered
         -- updates space updates >250ms apart), so it almost never skipped (measured
         -- run=755 / skip=4). Scan once every SCAN_EVERY updates instead, staggered by id
@@ -1127,7 +1127,7 @@ local function ManageCombat(bandit)
         end
     end
 
-    -- PERF FORK: break down scan decisions. forced = ran due to hostile/combatActive;
+    -- PERF OVERRIDE: break down scan decisions. forced = ran due to hostile/combatActive;
     -- timer = ran while eligible (throttle passed it through); skip = throttled out.
     if not runScan then
         scanSkip = scanSkip + 1
@@ -1137,7 +1137,7 @@ local function ManageCombat(bandit)
         scanTimer = scanTimer + 1
     end
 
-    -- PERF FORK (B2): conditional scan gate. A bandit that can't shoot (out of ammo /
+    -- PERF OVERRIDE (B2): conditional scan gate. A bandit that can't shoot (out of ammo /
     -- melee only) can only act on enemies within melee (~2.6) or flee range
     -- (escapeDist=10); it still pays a CanSee raycast on every entity within ~40 tiles
     -- today. Tighten its pre-filter to 15 Manhattan (covers euclidean-10 flee range with
@@ -1148,7 +1148,7 @@ local function ManageCombat(bandit)
     -- affected by this, so hostile melee NPCs still chase players normally.
     local scanGate = isOutOfAmmo and 15 or 57
 
-    -- PERF FORK (flee-dedup): accumulate the flee repulsion vector during the main
+    -- PERF OVERRIDE (flee-dedup): accumulate the flee repulsion vector during the main
     -- scan below, so the flee branch later doesn't need a second full pass over the
     -- whole cell. Every enemy within escapeDist (euclidean 10 -> Manhattan < 14.14)
     -- passes both scan gates (15 and 57), so this captures exactly the same set the
@@ -1160,7 +1160,7 @@ local function ManageCombat(bandit)
     local fleeClosestDX, fleeClosestDY = 0, 0
 
     if runScan then
-    -- PERF FORK (B3): walk only buckets near the bandit instead of all of CacheLight.
+    -- PERF OVERRIDE (B3): walk only buckets near the bandit instead of all of CacheLight.
     -- Candidate positions are still read live from CacheLight and re-gated by
     -- distManhattan < scanGate, so the considered set matches the old full scan.
     -- reach = floor(scanGate/cell)+1 is the exact worst-case cell span for the gate
@@ -1182,12 +1182,12 @@ local function ManageCombat(bandit)
 
         -- quick manhattan check for performance boost
         local distManhattan = math.abs(potentialEnemy.x - zx) + math.abs(potentialEnemy.y - zy)
-        if distManhattan < scanGate then -- PERF FORK (B2): was < 57
+        if distManhattan < scanGate then -- PERF OVERRIDE (B2): was < 57
 
             if BanditUtils.AreEnemies(potentialEnemy.brain, brain) then
             -- if not potentialEnemy.brain or (brain.clan ~= potentialEnemy.brain.clan and (brain.hostile or potentialEnemy.brain.hostile)) then
      
-                -- PERF FORK (flee-dedup): contribute to the repulsion vector here using
+                -- PERF OVERRIDE (flee-dedup): contribute to the repulsion vector here using
                 -- the lightweight cache record. Matches the old flee second pass, which
                 -- counted every enemy within escapeDist regardless of CanSee/light/alive.
                 do
@@ -1306,13 +1306,13 @@ local function ManageCombat(bandit)
                 end
             end
         end
-                    end -- PERF FORK (B3): close if potentialEnemy
+                    end -- PERF OVERRIDE (B3): close if potentialEnemy
                 end -- close for bi
                 end -- close if bucket
             end -- close for gy
             end -- close if col
         end -- close for gx
-    -- PERF FORK: record whether a threat was present this scan, so the throttle
+    -- PERF OVERRIDE: record whether a threat was present this scan, so the throttle
     -- above keeps an engaged bandit scanning every tick. Self-clears the moment a
     -- (re-run) scan finds nothing, dropping the bandit back to the cheap cadence.
     if enemyCharacter or enemies > 0 then
@@ -1320,7 +1320,7 @@ local function ManageCombat(bandit)
     else
         brain.combatActive = false
     end
-    end -- PERF FORK: close runScan guard
+    end -- PERF OVERRIDE: close runScan guard
 
     if getWorld():getGameMode() == "Multiplayer" and IsWindowClose(bandit) then
         if bandit:getPrimaryHandItem() then
@@ -1392,7 +1392,7 @@ local function ManageCombat(bandit)
         -- fixme: i need to refactror this
         if not BanditBrain.HasMoveTask(brain) then
 
-            -- PERF FORK (flee-dedup): reuse the repulsion vector accumulated during the
+            -- PERF OVERRIDE (flee-dedup): reuse the repulsion vector accumulated during the
             -- main scan above, instead of a second full pass over the whole cell.
             local sx, sy = fleeSx, fleeSy
             local closestDistSq = fleeClosestDistSq
@@ -1968,7 +1968,7 @@ local function GenerateTask(bandit, uTick)
 
     -- MANAGE MELEE / SHOOTING TASKS
     if #tasks == 0  then
-        -- PERF FORK: time ManageCombat itself so the perf report can isolate the
+        -- PERF OVERRIDE: time ManageCombat itself so the perf report can isolate the
         -- scan cost from the rest of OnBanditUpdate.
         local mcTs = getTimestampMs()
         local combatTasks = ManageCombat(bandit)
@@ -2180,7 +2180,7 @@ local function OnBanditUpdate(zombie)
     end
     
     -- ADJUST HUMAN VISUALS
-    -- PERF FORK (B4 measure): time ApplyVisuals to size its share before optimizing.
+    -- PERF OVERRIDE (B4 measure): time ApplyVisuals to size its share before optimizing.
     local mvTs = getTimestampMs()
     Bandit.ApplyVisuals(bandit, brain)
     local mvEl = getTimestampMs() - mvTs
@@ -2205,7 +2205,7 @@ local function OnBanditUpdate(zombie)
     ManageSpeechCooldown(brain)
 
     -- ACTION STATE TWEAKS
-    -- PERF FORK (profile): time ManageActionState.
+    -- PERF OVERRIDE (profile): time ManageActionState.
     local asTs = getTimestampMs()
     local continue = ManageActionState(bandit)
     local asEl = getTimestampMs() - asTs
@@ -2229,7 +2229,7 @@ local function OnBanditUpdate(zombie)
         Bandit.Say(bandit, "DEAD")
     end
     
-    -- PERF FORK (profile): time GenerateTask (includes MC; GT-MC = endurance/health/
+    -- PERF OVERRIDE (profile): time GenerateTask (includes MC; GT-MC = endurance/health/
     -- collisions/brain-program cost).
     local gtTs = getTimestampMs()
     GenerateTask(bandit, uTick)
@@ -2240,7 +2240,7 @@ local function OnBanditUpdate(zombie)
     local task = Bandit.GetTask(bandit)
     if task then
 
-        -- PERF FORK (profile): time ProcessTask.
+        -- PERF OVERRIDE (profile): time ProcessTask.
         local ptTs = getTimestampMs()
         ProcessTask(bandit, task)
         local ptEl = getTimestampMs() - ptTs
@@ -2600,7 +2600,7 @@ local function OnDeadBodySpawn(body)
 end
 
 local function perf()
-    -- PERF FORK: once-per-minute diagnostic report (low spam). Everything needed to
+    -- PERF OVERRIDE: once-per-minute diagnostic report (low spam). Everything needed to
     -- interpret framerate in one tailable line:
     --   N        = live crowd size (bandits / zombies) from the cache; the N in O(N^2).
     --   scans    = B1 throttle: entity scans run vs skipped this minute.
@@ -2649,7 +2649,7 @@ Events.OnZombieDead.Add(OnZombieDead)
 Events.OnDeadBodySpawn.Remove(OnDeadBodySpawn)
 Events.OnDeadBodySpawn.Add(OnDeadBodySpawn)
 
--- PERF FORK: perf printer ENABLED for phase profiling (GT/PT/AS breakdown of the
+-- PERF OVERRIDE: perf printer ENABLED for phase profiling (GT/PT/AS breakdown of the
 -- diffuse non-scan cost). Disable again by commenting the two lines below.
 Events.EveryOneMinute.Remove(perf)
 Events.EveryOneMinute.Add(perf)

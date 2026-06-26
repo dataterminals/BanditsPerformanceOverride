@@ -203,7 +203,7 @@ their methods: `Bandit.*`, `BanditBrain.*`, `BanditZombie.*` (incl. the cache ta
 `BanditUtils.*`, `BanditPrograms.*`, `ZombiePrograms.*`, `ZombieActions.*`.
 
 ⇒ Algorithmic fixes inside `ManageCombat`/`GenerateTask` are **only** reachable by **editing the
-core file** (or shadowing the whole file via load order — a fork in disguise). Everything else must
+core file** (or shadowing the whole file via load order — an override in disguise). Everything else must
 work through the global tables or the content mod. See `OPTIMIZATION-PLAN.md`.
 
 ---

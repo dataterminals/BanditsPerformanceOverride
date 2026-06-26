@@ -9,7 +9,7 @@ Read `FINDINGS.md` first. The single most important fact driving this plan:
 > (`Bandit`, `BanditBrain`, `BanditZombie`, `BanditUtils`, `BanditPrograms`, `ZombiePrograms`,
 > `ZombieActions`) are reachable from outside.
 
-So options split into **(A) fully standalone** and **(B) requires forking the core file.**
+So options split into **(A) fully standalone** and **(B) requires overriding the core file.**
 
 ---
 
@@ -76,11 +76,11 @@ the author's comment that it stops off-screen bandits doing non-move actions. Be
 
 ---
 
-## Bucket B — requires forking the core (`BanditUpdate.lua`)
+## Bucket B — requires overriding the core (`BanditUpdate.lua`)
 
 These are the real algorithmic fixes. They live inside `local function ManageCombat` /
 `GenerateTask`, so they can only be done by **editing the core file** or **shadowing the whole file
-via mod load order** (ship your own `client/BanditUpdate.lua` that loads after Bandits — a fork
+via mod load order** (ship your own `client/BanditUpdate.lua` that loads after Bandits — an override
 wearing a mod costume, fragile across core updates). Decide consciously whether you're willing to
 maintain that.
 
@@ -121,7 +121,7 @@ the scan query only neighboring buckets → ~O(N·k).
 1. **Measure** (perf hook) → baseline.
 2. **A1** (population) → re-measure. Probably the biggest, easiest gain. Possibly enough on its own.
 3. **A2 + A3** (memoize `AreEnemies`, sandbox trims) → re-measure.
-4. **Decision point:** is Bucket A enough? If not, commit to a **fork** of `BanditUpdate.lua`.
+4. **Decision point:** is Bucket A enough? If not, commit to an **override** of `BanditUpdate.lua`.
 5. **B2** (tighten gate) + **B1** (throttle/cache) → re-measure. This is the real fix.
 6. **B3** (spatial grid) only if still needed at very high N.
 
@@ -151,15 +151,15 @@ the scan query only neighboring buckets → ~O(N·k).
 3. [ ] Answer the "Are pop multipliers sandbox vars?" question → build the **A1 standalone pop mod
        / preset**. Re-measure.
 4. [ ] Add **A2** `AreEnemies` memoization in the same standalone mod. Re-measure.
-5. [ ] Make the **fork-or-not** decision for Bucket B.
-6. [ ] If forking: implement **B2** then **B1**; re-measure after each.
+5. [ ] Make the **override-or-not** decision for Bucket B.
+6. [ ] If overriding: implement **B2** then **B1**; re-measure after each.
 
 ---
 
 ## Risks / caveats
 
 - **Core updates** will overwrite any direct edits to `mods/Bandits` and can break a file-shadow
-  fork. Keep fork changes minimal and documented (diff-friendly).
+  override. Keep override changes minimal and documented (diff-friendly).
 - **Behavior changes**: lowering N and throttling scans changes the feel (less dense, slightly less
   reactive combat). That's the intended trade; tune to taste.
 - **Don't optimize the brains** (`ZP*.lua`) for FPS — they're not the per-tick cost (see

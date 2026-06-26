@@ -1,11 +1,11 @@
 # Bandits Performance Override
 
-A **performance fork** of the Project Zomboid **Bandits (V2)** framework for **B42**, aimed at
+A **performance override** for the Project Zomboid **Bandits (V2)** framework for **B42**, aimed at
 clawing back framerate in dense human-NPC scenes (e.g. **Bandits: Week One**, which can drop to
 ~8 FPS).
 
 > **Status: working (v0.2.0).** B1–B3 implemented, measured, and validated in-game: a dense
-> Bandits: Week One scene went from ~8 FPS at ~100 NPCs to smooth at **~300**. The fork is kept as a
+> Bandits: Week One scene went from ~8 FPS at ~100 NPCs to smooth at **~300**. The override is kept as a
 > minimal, greppable diff against vanilla Bandits 42.18 for easy re-porting.
 
 ---
@@ -16,7 +16,7 @@ The dominant cost is **`ManageCombat`** in the core `BanditUpdate.lua`: an un-th
 every-update, all-pairs proximity + line-of-sight scan run **per active bandit** over **every
 zombie + bandit in the cell** — i.e. **O(N²)**. At ~100+ NPCs that's the framerate killer.
 
-This fork rewrites that scan with four changes (each tagged `-- PERF FORK:`):
+This override rewrites that scan with four changes (each tagged `-- PERF OVERRIDE:`):
 
 1. **Count-based throttle** — peaceful, non-hostile NPCs run the scan only once every Nth update
    (staggered per-NPC so the crowd desyncs across frames). Anyone in active combat or flagged
@@ -42,11 +42,11 @@ monkey-patch them. The only mechanism is **file shadowing**: this mod ships its 
 `media/lua/client/BanditUpdate.lua` and loads **after** the core mod (`require=Bandits2`) so the
 game uses our copy instead.
 
-That makes this a **maintained fork**, not an additive patch:
+That makes this a **maintained override**, not an additive patch:
 
 - **Pinned to Bandits `42.18`.** When the core mod updates, our copy goes stale and must be
   **re-synced**: diff the new vanilla file against ours and re-apply our changes.
-- Every change we make is marked with a greppable `-- PERF FORK:` comment so the patch set is easy
+- Every change we make is marked with a greppable `-- PERF OVERRIDE:` comment so the patch set is easy
   to find and re-port.
 - **Confirmed working:** B42 does let a second mod win the file-shadow for client Lua by load
   order. `require=Bandits2` makes this mod load after the core, so the game uses our copy (the
@@ -69,9 +69,10 @@ game picks them up.
 mod.info                              # root mod metadata (id=BanditsPerformanceOverride)
 42/
   mod.info                            # versioned mod metadata (identical)
-  media/lua/client/BanditUpdate.lua   # the fork (vanilla 42.18 baseline + PERF FORK changes)
+  media/lua/client/BanditUpdate.lua   # the override (vanilla 42.18 baseline + PERF OVERRIDE changes)
 research/                             # the original performance investigation (preserved)
   README.md  FINDINGS.md  OPTIMIZATION-PLAN.md
+  HOW-WE-FOUND-IT.md                  # narrative of the hunt: how we figured it out
 ```
 
 ---
