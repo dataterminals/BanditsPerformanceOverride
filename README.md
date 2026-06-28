@@ -2,11 +2,12 @@
 
 A **performance override** for the Project Zomboid **Bandits (V2)** framework for **B42**, aimed at
 clawing back framerate in dense human-NPC scenes (e.g. **Bandits: Week One**, which can drop to
-~8 FPS).
+~8 FPS). As of v0.3.0 it also carries one **behavior fix** (bandits stuck walking into low fences).
 
-> **Status: working (v0.2.0).** B1–B3 implemented, measured, and validated in-game: a dense
-> Bandits: Week One scene went from ~8 FPS at ~100 NPCs to smooth at **~300**. The override is kept as a
-> minimal, greppable diff against vanilla Bandits 42.18 for easy re-porting.
+> **Status: working (v0.3.0).** B1–B3 perf changes implemented, measured, and validated in-game: a
+> dense Bandits: Week One scene went from ~8 FPS at ~100 NPCs to smooth at **~300**. v0.3.0 adds a
+> stuck-on-fence recovery (behavior, not perf). The override is kept as a minimal, greppable diff
+> against vanilla Bandits 42.18 for easy re-porting.
 
 ---
 
@@ -35,6 +36,23 @@ The full investigation and evidence — plus the levers we measured but delibera
 
 ---
 
+## Behavior fix: stuck-on-fence recovery (v0.3.0)
+
+Separate from the performance work (and tagged `-- BEHAVIOR OVERRIDE:` rather than
+`-- PERF OVERRIDE:` so the two stay separable), v0.3.0 fixes bandits grinding in place against low /
+waist-high fences.
+
+Vanilla's fence-vault (`ManageCollisions`) only fires when the engine reports a real collision **and**
+`isFacingObject(obj, 0.5)` passes. On a diagonal approach that facing gate never clears, so the
+bandit pushes into the fence forever. The fix (`ManageStuck`) samples each bandit's **net
+displacement on a wall-clock interval** (frame-rate independent — important in the low-FPS scenes
+this mod targets) while it has an active `Move`/`GoTo` task. If it made no real progress, it forces
+the recovery: **vault a low fence directly** (bypassing the facing gate) when one is on the tile
+ahead, otherwise **re-issue the path**. Tunables live at the top of the `ManageStuck` block
+(`BPO_STUCK_INTERVAL_MS`, `BPO_STUCK_DIST`, `BPO_STUCK_COOLDOWN_MS`).
+
+---
+
 ## How it works (and the catch)
 
 The hot functions in `BanditUpdate.lua` are `local` (file-private), so a normal mod **cannot**
@@ -46,8 +64,8 @@ That makes this a **maintained override**, not an additive patch:
 
 - **Pinned to Bandits `42.18`.** When the core mod updates, our copy goes stale and must be
   **re-synced**: diff the new vanilla file against ours and re-apply our changes.
-- Every change we make is marked with a greppable `-- PERF OVERRIDE:` comment so the patch set is easy
-  to find and re-port.
+- Every change we make is marked with a greppable comment so the patch set is easy to find and
+  re-port: `-- PERF OVERRIDE:` for performance changes, `-- BEHAVIOR OVERRIDE:` for behavior fixes.
 - **Confirmed working:** B42 does let a second mod win the file-shadow for client Lua by load
   order. `require=Bandits2` makes this mod load after the core, so the game uses our copy (the
   in-game load marker in the console confirms it).
@@ -69,7 +87,7 @@ game picks them up.
 mod.info                              # root mod metadata (id=BanditsPerformanceOverride)
 42/
   mod.info                            # versioned mod metadata (identical)
-  media/lua/client/BanditUpdate.lua   # the override (vanilla 42.18 baseline + PERF OVERRIDE changes)
+  media/lua/client/BanditUpdate.lua   # the override (vanilla 42.18 baseline + PERF OVERRIDE / BEHAVIOR OVERRIDE changes)
 research/                             # the original performance investigation (preserved)
   README.md  FINDINGS.md  OPTIMIZATION-PLAN.md
   HOW-WE-FOUND-IT.md                  # narrative of the hunt: how we figured it out

@@ -2,7 +2,9 @@ require "BanditZombie"
 
 -- ============================================================================
 -- PERF OVERRIDE (BanditsPerformanceOverride): file-shadow of Bandits 42.18
--- client/BanditUpdate.lua. Every change vs vanilla is tagged "PERF OVERRIDE".
+-- client/BanditUpdate.lua. Performance changes are tagged "PERF OVERRIDE";
+-- behavior fixes (e.g. the stuck-on-fence recovery) are tagged "BEHAVIOR OVERRIDE"
+-- so the two concerns stay separable and greppable.
 -- Purpose: throttle the O(N^2) per-tick ManageCombat proximity/LOS scan that
 -- dominates frame time in dense scenes. See research/ for the full analysis.
 -- This print is the load marker: seeing it in console proves this shadow won
@@ -922,6 +924,129 @@ local function ManageCollisions(bandit)
     end
 
     return tasks
+end
+
+-- ============================================================================
+-- BEHAVIOR OVERRIDE (BanditsPerformanceOverride): "walking in place" recovery.
+-- Not a performance change -- tagged "BEHAVIOR OVERRIDE" so it stays separable
+-- from the PERF OVERRIDE work and could be split into its own mod later.
+--
+-- Problem: the vanilla fence-vault above (ManageCollisions) only fires when the
+-- engine reports a real collision AND isFacingObject(obj, 0.5) passes. On a
+-- diagonal approach to a low / waist-high fence that facing gate never clears,
+-- so the bandit grinds in place forever (reported in testing).
+--
+-- Fix: sample net displacement on a wall-clock interval (frame-rate independent,
+-- which matters in the dense, low-FPS scenes this mod targets) while a bandit has
+-- an active Move/GoTo task. If it made no real progress, force the recovery:
+-- vault a low fence directly (skipping the facing gate) if one is ahead,
+-- otherwise re-issue the path. Mirrors how ManageCollisions / ZAMove drive the
+-- engine, so timing relative to ProcessTask matches the vanilla climb path.
+-- ============================================================================
+local BPO_STUCK_INTERVAL_MS = 600   -- how often to sample net progress
+local BPO_STUCK_DIST = 0.25         -- min tiles of progress expected per window
+local BPO_STUCK_COOLDOWN_MS = 1200  -- min gap between forced recoveries (let it play out)
+
+-- Mirror ManageCollisions' detection: scan the bandit's tile and the one tile
+-- ahead (rounded forward direction) for a low / hoppable fence. Returns the
+-- object or nil.
+local function BPO_ForwardFenceObject(bandit)
+    local fd = bandit:getForwardDirection()
+    local fdx = math.floor(fd:getX() + 0.5)
+    local fdy = math.floor(fd:getY() + 0.5)
+    local bx = math.floor(bandit:getX())
+    local by = math.floor(bandit:getY())
+    local bz = bandit:getZ()
+    local cell = getCell()
+    local sqs = {
+        {x = bx, y = by},
+        {x = bx + fdx, y = by + fdy},
+    }
+    for _, s in ipairs(sqs) do
+        local square = cell:getGridSquare(s.x, s.y, bz)
+        if square then
+            local objects = square:getObjects()
+            for i = 0, objects:size() - 1 do
+                local object = objects:get(i)
+                if object then
+                    local properties = object:getProperties()
+                    if properties and (properties:get("FenceTypeLow") or object:isHoppable()) then
+                        return object
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function ManageStuck(bandit)
+    local task = Bandit.GetTask(bandit)
+    local md = bandit:getModData()
+
+    -- Only meaningful while the bandit is trying to walk somewhere.
+    if not (task and (task.action == "Move" or task.action == "GoTo")) then
+        md.bpoStuckMs = nil
+        return
+    end
+
+    -- Don't fight the engine while it is mid-bump/climb/getup/etc. Reset the
+    -- sampler so progress is measured fresh once normal walking resumes.
+    local asn = bandit:getActionStateName()
+    if asn == "bumped" or asn == "onground" or asn == "climbfence" or asn == "getup" or asn == "turnalerted" then
+        md.bpoStuckMs = nil
+        return
+    end
+
+    local now = getTimestampMs()
+
+    -- Hold off after a forced recovery so the vault / re-path can take effect.
+    if md.bpoStuckCdMs and now < md.bpoStuckCdMs then return end
+
+    local bx, by = bandit:getX(), bandit:getY()
+
+    -- Arm the sampler on the first eligible update of a move.
+    if not md.bpoStuckMs then
+        md.bpoStuckMs = now
+        md.bpoStuckX = bx
+        md.bpoStuckY = by
+        return
+    end
+
+    if now - md.bpoStuckMs < BPO_STUCK_INTERVAL_MS then return end
+
+    local moved = BanditUtils.DistTo(bx, by, md.bpoStuckX, md.bpoStuckY)
+
+    -- Re-arm for the next window regardless of outcome.
+    md.bpoStuckMs = now
+    md.bpoStuckX = bx
+    md.bpoStuckY = by
+
+    if moved >= BPO_STUCK_DIST then return end -- making progress, not stuck
+
+    -- STUCK: force a recovery and start the cooldown.
+    md.bpoStuckCdMs = now + BPO_STUCK_COOLDOWN_MS
+
+    local fence = BPO_ForwardFenceObject(bandit)
+    if fence then
+        -- Force the vault, bypassing the isFacingObject gate that stalls here.
+        bandit:faceThisObject(fence)
+        bandit:changeState(ClimbOverFenceState.instance())
+        bandit:setBumpType("ClimbFenceEnd")
+        return
+    end
+
+    -- Not a fence (corner, geometry, another NPC): re-kick the pathfinder
+    -- toward the task destination, the same way ZAMove / ZAGoTo do on start.
+    if task.x and task.y then
+        local tz = task.z or bandit:getZ()
+        if task.action == "Move" then
+            bandit:getPathFindBehavior2():pathToLocation(task.x, task.y, tz)
+            bandit:getPathFindBehavior2():update()
+        else
+            bandit:pathToLocationF(task.x, task.y, tz)
+        end
+    end
 end
 
 -- manages melee and weapon combat
@@ -1992,8 +2117,14 @@ local function GenerateTask(bandit, uTick)
             for _, t in pairs(colissionTasks) do table.insert(tasks, t) end
         end
     end
-    
-    -- CUSTOM PROGRAM 
+
+    -- BEHAVIOR OVERRIDE: unstick a bandit whose Move/GoTo task is making no progress
+    -- (e.g. grinding against a low fence the facing gate above won't vault).
+    -- Runs every update so the wall-clock sampler stays consistent; it self-gates
+    -- on the active task and drives the engine directly (no task queued here).
+    ManageStuck(bandit)
+
+    -- CUSTOM PROGRAM
     if #tasks == 0 and not Bandit.HasTask(bandit) then
         local program = Bandit.GetProgram(bandit)
         if program and program.name and program.stage  then
